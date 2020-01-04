@@ -1,0 +1,7 @@
+image: /home/foxbot/catkin_ws/src/foxbot_ros/maps/losserand_v4_2_num_accumulated_range_data_3.pgm
+resolution: 0.050000
+origin: [-1.200000, -2.843393, 0.000000]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+
