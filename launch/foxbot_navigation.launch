@@ -24,7 +24,7 @@
 <node pkg="tf" type="static_transform_publisher" name="tst" args="0 0 0 0 0 0 odom base_footprint 50" />
 -->
 
-<node pkg="tf" type="static_transform_publisher" name="tt" args="0 0 0 0 0 0 base_footprint base_link 50" />
+<node pkg="tf" type="static_transform_publisher" name="tt" args="0 0 0 3.1416 0 0 base_footprint base_link 50" />
 
 
 <node pkg="tf" type="static_transform_publisher" name="tsst" args="0 0 0 0 0 0 base_link base_scan 50" />
