@@ -1,4 +1,4 @@
-image: /home/matt/rosmap/losserand_v7_1_res003_wo_odom.pgm
+image: /home/foxbot/catkin_ws/src/foxbot_ros/maps/losserand_v7_1_res003_wo_odom.pgm
 resolution: 0.030000
 origin: [-1.150000, -3.070802, 0.000000]
 negate: 0
