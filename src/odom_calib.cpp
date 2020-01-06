@@ -12,7 +12,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Description:
+ *  Description: Script to run a trajectory from a velocity table
  *  Author: Matthieu Magnon
  *
  */
@@ -22,24 +22,6 @@
 #include "odom_calib.h"
 
 #define PUB_FREQUENCY   10      // [Hz]
-
-#define LENGTH  1.0             // [m]
-
-#define LIN_VEL_MAX     0.1     // [m/s]
-#define ANG_VEL_MAX     0.3     // [rad/s]
-
-#define RAMP_TIME       3.0     // [s]
-
-#define LIN_T_FINAL     ((LENGTH + RAMP_TIME * LIN_VEL_MAX) / LIN_VEL_MAX)
-
-float vel_tab[10][3] = {{0.0, 0.0, 0.0},
-                        {RAMP_TIME, LIN_VEL_MAX, 0.0},
-                        {LIN_T_FINAL - RAMP_TIME, LIN_VEL_MAX},
-                        {LIN_T_FINAL, 0.0, 0.0},
-                        {}
-                        };
-
-
 
 int main(int argc, char** argv)
 {
@@ -71,16 +53,14 @@ int main(int argc, char** argv)
         ROS_INFO("dt = %fs", dt[i]);
 
         i++;
-
         pub.publish(msg);
-    
         ros::spinOnce();
         loop_rate.sleep();
     }
 
     ROS_INFO("Sequence terminated");
 
-    // compute static about time
+    // compute static about time jittering
     double mean = 0.0;
     for (i = 1; i < SEQ_NB; i++) {
         mean += dt[i];
@@ -93,7 +73,7 @@ int main(int argc, char** argv)
     }
     std = sqrt(std / SEQ_NB);
 
-    ROS_INFO("Time jerk : avg = %fs, std = %fs", (float)mean, (float)std);
+    ROS_INFO("Time jittering : avg = %fs, std = %fs", (float)mean, (float)std);
 
     return 0;
 }

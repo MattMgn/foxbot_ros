@@ -1,6 +1,26 @@
+/*
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ *  Description: Script to run a trajectory from a velocity table
+ *  Author: Matthieu Magnon
+ *
+ */
+
 #ifndef ODOM_CALIB_H_
 #define ODOM_CALIB_H
 
+// velocity table
 #define SEQ_NB      808
 float cmd_vel_table[SEQ_NB][3] = {
 {0.000000, 0.000000, 0.000000},
