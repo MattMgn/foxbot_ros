@@ -3,7 +3,7 @@ project(foxbot_ros)
 
 ## Find catkin macros and libraries
 ## Find catkin and any catkin packages
-find_package(catkin REQUIRED COMPONENTS roscpp std_msgs geometry_msgs tf sensor_msgs)
+find_package(catkin REQUIRED COMPONENTS roscpp rospy std_msgs geometry_msgs tf sensor_msgs)
 
 ## Declare a catkin package
 catkin_package()
