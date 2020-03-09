@@ -149,10 +149,10 @@ int main(int argc, char** argv)
 Eigen::Vector2f control(Eigen::Vector4f X, Eigen::Vector2f YRef, Eigen::Vector2f dYRef)
 {
     Eigen::MatrixXf A(2, 2);
-    A(1, 1) = - X(3) * sinf(X(2));
     A(0, 1) = cosf(X(2));
     A(1, 0) = X(3) * cosf(X(2));
     A(1, 1) = sinf(X(2));
+    A(0, 0) = -X(3) * sin(X(2));
 
     Eigen::Vector2f Y;
     Y(0) = X(0);
