@@ -27,6 +27,7 @@
 
 //#define DEBUG
 #define DEBUG_CONTROL
+#define DEBUG_BEZIER
 
 #define TRAJ_POINT_NB   3
 #define TRAJ_DURATION   30      //s
@@ -199,26 +200,36 @@ struct traj bezier(float *x_coord, float *y_coord, int pt_nb, float dt, float du
         return xyt;
     }
 
-    xyt.nb = (int)(1.0 / dt) + 1;
+    xyt.nb = (int)(duration / dt) + 1;
 
     float time[xyt.nb];
     float one_minus_time[xyt.nb];
 
+    ROS_INFO("bezier: compute %i discretization time intervals, with simulation time interval = %fs,"
+             " corresponding to real time from 0s to %fs, ", xyt.nb, dt / duration, xyt.nb * dt);
+
     /* Precompute vectors */
     for (int k = 0; k < xyt.nb; k++) {
-        time[k] = k * dt;
+        time[k] = k * dt / duration;
         one_minus_time[k] = 1.f - time[k];
         xyt.t[k] = duration * time[k];
+        ROS_ERROR("time[k] = %f", time[k]);
     }
 
-    int pt_n = pt_nb - 1;
-    for (int i = 0; i < pt_n; i++) {
-        float n_c_k = (float)n_choose_k(pt_n, i);
+    int n = pt_nb - 1;
+    for (int i = 0; i <= n; i++) {
+        float n_c_k = (float)n_choose_k(n, i);
         for (int k = 0; k < xyt.nb; k++) {
-            xyt.x[k] = xyt.x[k] + n_c_k * x_coord[i] * pow(one_minus_time[k], pt_n - i) * pow(time[k], i);
-            xyt.y[k] = xyt.y[k] + n_c_k * y_coord[i] * pow(one_minus_time[k], pt_n - i) * pow(time[k], i);
+            xyt.x[k] = xyt.x[k] + n_c_k * x_coord[i] * pow(one_minus_time[k], n - i) * pow(time[k], i);
+            xyt.y[k] = xyt.y[k] + n_c_k * y_coord[i] * pow(one_minus_time[k], n - i) * pow(time[k], i);
         }
     }
+
+
+#ifdef DEBUG_BEZIER
+    for (int k = 0; k < xyt.nb; k++)
+        ROS_INFO("bezier: k = %i | t =  %f | x = %f | y = %f", k, xyt.t[k], xyt.x[k], xyt.y[k]);
+#endif
 
     return xyt;
 }
