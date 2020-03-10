@@ -20,43 +20,56 @@
 #include <ros/ros.h>
 #include <geometry_msgs/Twist.h>
 #include <nav_msgs/Odometry.h>
+#include <nav_msgs/Path.h>
 
 #include <Eigen/Eigen>
 
 #include <iostream>
 
-//#define DEBUG
+#define DEBUG
 #define DEBUG_CONTROL
-#define DEBUG_BEZIER
+//#define DEBUG_BEZIER
 
 #define TRAJ_POINT_NB   3
 #define TRAJ_DURATION   30      //s
-#define TRAJ_DT         0.02    //ms
-#define PUB_FREQUENCY   50     //Hz
-#define TIME_POINT_MAX  1000
+#define TRAJ_DT         0.5    //s
+#define PUB_FREQUENCY   2     //Hz
+#define TIME_POINT_MAX  10000
+#define MAX_LIN_SPEED   0.25     //m/s
+#define MAX_ANG_SPEED   0.35  //rad/s [20deg/s]
 
 struct traj
 {
-    int nb;
-    float x[TIME_POINT_MAX];
-    float y[TIME_POINT_MAX];
-    float t[TIME_POINT_MAX];
+    int nb = 0;
+    float x[TIME_POINT_MAX] = {0};
+    float y[TIME_POINT_MAX] = {0};
+    float t[TIME_POINT_MAX] = {0};
 };
 
 /* State of the robot: x, y, theta, v */
-Eigen::VectorXf X(4);
-Eigen::VectorXf U(2);
+Eigen::VectorXd X(4);
+Eigen::VectorXd U(2);
 
 int n_choose_k(int n, int k);
 int factorial(int n);
 struct traj bezier(float *x_coord, float *y_coord, int pt_nb, float dt, float duration);
 void odomMessageCallback(const nav_msgs::Odometry& odom_msg);
-Eigen::Vector2f control(Eigen::Vector4f X, Eigen::Vector2f YRef, Eigen::Vector2f dYRef);
+Eigen::Vector2d control(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef);
 
-float x_coord[TRAJ_POINT_NB] = {-1.0,  0.0, 0.0};
-float y_coord[TRAJ_POINT_NB] = {1.0, 0.75, 0.0};
+float x_coord[TRAJ_POINT_NB] = {-0.5,  1.0, 3.0};
+float y_coord[TRAJ_POINT_NB] = {0.5, 6.0, 3.0};
 
-bool at_least_odom_received = false;
+bool at_least_one_odom_received = false;
+
+static float saturate(float val, float lower, float upper)
+{
+    return std::max(lower, std::min(val, upper));
+}
+
+template <typename type>
+type sign(type value) {
+    return type((value>0)-(value<0));
+}
 
 int main(int argc, char** argv)
 {
@@ -80,7 +93,31 @@ int main(int argc, char** argv)
 
     /* Compute trajectory */
     struct traj coord = bezier(x_coord, y_coord, TRAJ_POINT_NB, TRAJ_DT, TRAJ_DURATION);
-
+    ros::Publisher path_pub = nh.advertise<nav_msgs::Path>("path", 1000);
+    nav_msgs::Path path_msg;
+    path_msg.header.seq = 0;
+    path_msg.header.stamp = ros::Time::now();
+    path_msg.header.frame_id = "odom";
+    for (int i = 0; i < coord.nb; i++) {
+        geometry_msgs::PoseStamped pose;
+        pose.header.seq = i;
+        pose.header.stamp = ros::Time::now() + ros::Duration((float)(i) * TRAJ_DT);
+        pose.header.frame_id = "odom";
+        pose.pose.position.x = (float)coord.x[i];
+        pose.pose.position.y = (float)coord.y[i];
+        pose.pose.position.z = 0.f;
+        pose.pose.orientation.w = 1.f;
+        pose.pose.orientation.x = 0.f;
+        pose.pose.orientation.y = 0.f;
+        pose.pose.orientation.z = 0.f;
+        path_msg.poses.push_back(pose);
+#ifdef DEBUG
+        ROS_INFO("pose(%f) = [%f %f]", (float)(i) * TRAJ_DT, pose.pose.position.x, pose.pose.position.y);
+#endif
+    }
+    path_pub.publish(path_msg);
+    ros::spinOnce();
+    ros::Duration(1.0).sleep();
 
 #ifdef DEBUG
     std::cout << "XX = [";
@@ -104,32 +141,42 @@ int main(int argc, char** argv)
     while (ros::ok() && (p < coord.nb - 1))
     {
         geometry_msgs::Twist twist_msg;
-        if (at_least_odom_received) {
+        if (at_least_one_odom_received) {
             // estimate
             /* TODO: use visual pose estimator fusionned with odometry */
 
             // control
-            Eigen::Vector2f Cmd;
-            Eigen::Vector2f YRef;
-            Eigen::Vector2f dYRef;
-            YRef(0) = coord.x[p];
-            YRef(1) = coord.y[p];
-            dYRef(0) = (coord.x[p] - coord.x[p - 1]) / TRAJ_DT;
-            dYRef(1) = (coord.y[p] - coord.y[p - 1]) / TRAJ_DT;
+            Eigen::Vector2d Cmd;
+            Eigen::Vector2d YRef;
+            Eigen::Vector2d dYRef;
+            YRef(0) = (double)coord.x[p];
+            YRef(1) = (double)coord.y[p];
+            dYRef(0) = (double)((coord.x[p] - coord.x[p - 1]) / TRAJ_DT);
+            dYRef(1) = (double)((coord.y[p] - coord.y[p - 1]) / TRAJ_DT);
 
+/*
+            if (abs(X(3)) < 0.001) {
+                ROS_WARN("Robot velocity is too slow to be controllable, injecting speed");
+                X(3) = sign(X(3)) * 0.001;
+            }
+*/
             Cmd = control(X, YRef, dYRef);
 
-            ROS_INFO("X = [%f, %f]m | Yref = [%f, %f]m | dYref = [%f, %f]m/s | U = [%f m/s, %f deg/s]",
-                    X(0), X(1), YRef(0), YRef(1), dYRef(0), dYRef(1), Cmd(0), Cmd(0) * 57.f);
-
             // publish twist command
-            twist_msg.linear.x = Cmd(0);
-            twist_msg.angular.z = Cmd(1);
+            twist_msg.linear.x = saturate((float)Cmd(0), -MAX_LIN_SPEED, MAX_LIN_SPEED);
+            twist_msg.angular.z = saturate((float)Cmd(1), -MAX_ANG_SPEED, MAX_ANG_SPEED);
+
             twist_pub.publish(twist_msg);
+
+            ROS_ERROR("X =   lin_feedback_ctrl([%f, %f, %f, %f]', [%f, %f]', [%f, %f]')      U = [%f m/s, %f rad/s]   twist_msg lin/ang = [%f %f]  ",
+                       X(0), X(1), X(2), X(3), YRef(0), YRef(1), dYRef(0), dYRef(1), Cmd(0), Cmd(1), 
+                       twist_msg.linear.x, twist_msg.angular.z);
+
         } else {
             ROS_INFO("No odom message received");
         }
 
+        path_pub.publish(path_msg);
         ros::spinOnce();
         loop_rate.sleep();
         p++;
@@ -146,33 +193,34 @@ int main(int argc, char** argv)
  * v = (yr - y) + 2 * (dyr - dy);
  * u = inv(A) * v;
  */
-Eigen::Vector2f control(Eigen::Vector4f X, Eigen::Vector2f YRef, Eigen::Vector2f dYRef)
+Eigen::Vector2d control(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef)
 {
-    Eigen::MatrixXf A(2, 2);
-    A(0, 1) = cosf(X(2));
-    A(1, 0) = X(3) * cosf(X(2));
-    A(1, 1) = sinf(X(2));
+    Eigen::MatrixXd A(2, 2);
     A(0, 0) = -X(3) * sin(X(2));
+    A(0, 1) = cos(X(2));
+    A(1, 0) = X(3) * cos(X(2));
+    A(1, 1) = sin(X(2));
 
-    Eigen::Vector2f Y;
+    Eigen::Vector2d Y;
     Y(0) = X(0);
     Y(1) = X(1);
 
-    Eigen::Vector2f dY;
-    dY(0) = X(3) * cosf(X(2));
-    dY(1) = X(3) * sinf(X(2));
+    Eigen::Vector2d dY;
+    dY(0) = X(3) * cos(X(2));
+    dY(1) = X(3) * sin(X(2));
 
-    Eigen::Vector2f V;
-    V = (YRef - Y) + 2.f * (dYRef - dY);
+    Eigen::Vector2d V;
+    V(0) = 0.0; V(1) = 0.0;
+    V = (YRef - Y) + 2.0 * (dYRef - dY);
 
-    Eigen::Vector2f U;
-    U(0) = 0.f; U(1) = 0.f;
+    Eigen::Vector2d U;
+    U(0) = 0.0; U(1) = 0.0;
     U = A.inverse() * V;
 
 #ifdef DEBUG_CONTROL
     std::cout << " **** CONTROL ****" << std::endl;
-    std::cout << "X = " << X << std::endl;
     std::cout << "A = " << A << std::endl;
+    std::cout << "dY = " << dY << std::endl;
     std::cout << "V = " << V << std::endl;
     std::cout << "U = " << U << std::endl;
 #endif
@@ -213,7 +261,6 @@ struct traj bezier(float *x_coord, float *y_coord, int pt_nb, float dt, float du
         time[k] = k * dt / duration;
         one_minus_time[k] = 1.f - time[k];
         xyt.t[k] = duration * time[k];
-        ROS_ERROR("time[k] = %f", time[k]);
     }
 
     int n = pt_nb - 1;
@@ -254,11 +301,11 @@ int factorial(int n)
 
 void odomMessageCallback(const nav_msgs::Odometry& odom_msg)
 {
-    at_least_odom_received = true;
-    X(0) = odom_msg.pose.pose.position.x;
-    X(1) = odom_msg.pose.pose.position.y;
-    X(2) = 2.0f * asinf(odom_msg.pose.pose.orientation.z);
-    X(3) = odom_msg.twist.twist.linear.x;
+    at_least_one_odom_received = true;
+    X(0) = (double)odom_msg.pose.pose.position.x;
+    X(1) = (double)odom_msg.pose.pose.position.y;
+    X(2) = 2.0 * asin((double)odom_msg.pose.pose.orientation.z);
+    X(3) = (double)odom_msg.twist.twist.linear.x;
 
 #ifdef DEBUG
     ROS_INFO("X = [x, y, theta, v] = [%f, %f, %f, %f]", X(0), X(1), X(2) * 57.f, X(3));
