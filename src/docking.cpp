@@ -32,11 +32,12 @@
 
 #define TRAJ_POINT_NB   3
 #define TRAJ_DURATION   30      //s
-#define TRAJ_DT         0.5    //s
-#define PUB_FREQUENCY   2     //Hz
+#define TRAJ_DT         0.2    //s
+#define PUB_FREQUENCY   5     //Hz
 #define TIME_POINT_MAX  10000
-#define MAX_LIN_SPEED   0.25     //m/s
-#define MAX_ANG_SPEED   0.35  //rad/s [20deg/s]
+#define MAX_LIN_SPEED   1.0     //m/s
+#define MAX_ANG_SPEED   0.5  //rad/s [20deg/s]
+#define RAD_TO_DEG      57.295779513082320876798154814105f
 
 struct traj
 {
@@ -54,9 +55,10 @@ int n_choose_k(int n, int k);
 int factorial(int n);
 struct traj bezier(float *x_coord, float *y_coord, int pt_nb, float dt, float duration);
 void odomMessageCallback(const nav_msgs::Odometry& odom_msg);
-Eigen::Vector2d control(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef);
+Eigen::Vector2d control_basic(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef);
+Eigen::Vector2d control_linear_feedback(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef);
 
-float x_coord[TRAJ_POINT_NB] = {-0.5,  1.0, 3.0};
+float x_coord[TRAJ_POINT_NB] = {0.5,  1.0, 3.0};
 float y_coord[TRAJ_POINT_NB] = {0.5, 6.0, 3.0};
 
 bool at_least_one_odom_received = false;
@@ -142,35 +144,25 @@ int main(int argc, char** argv)
     {
         geometry_msgs::Twist twist_msg;
         if (at_least_one_odom_received) {
+
             // estimate
             /* TODO: use visual pose estimator fusionned with odometry */
 
             // control
-            Eigen::Vector2d Cmd;
             Eigen::Vector2d YRef;
             Eigen::Vector2d dYRef;
+            Eigen::Vector2d Cmd;
             YRef(0) = (double)coord.x[p];
             YRef(1) = (double)coord.y[p];
             dYRef(0) = (double)((coord.x[p] - coord.x[p - 1]) / TRAJ_DT);
             dYRef(1) = (double)((coord.y[p] - coord.y[p - 1]) / TRAJ_DT);
 
-/*
-            if (abs(X(3)) < 0.001) {
-                ROS_WARN("Robot velocity is too slow to be controllable, injecting speed");
-                X(3) = sign(X(3)) * 0.001;
-            }
-*/
-            Cmd = control(X, YRef, dYRef);
+            Cmd = control_basic(X, YRef, dYRef);
 
             // publish twist command
             twist_msg.linear.x = saturate((float)Cmd(0), -MAX_LIN_SPEED, MAX_LIN_SPEED);
             twist_msg.angular.z = saturate((float)Cmd(1), -MAX_ANG_SPEED, MAX_ANG_SPEED);
-
             twist_pub.publish(twist_msg);
-
-            ROS_ERROR("X =   lin_feedback_ctrl([%f, %f, %f, %f]', [%f, %f]', [%f, %f]')      U = [%f m/s, %f rad/s]   twist_msg lin/ang = [%f %f]  ",
-                       X(0), X(1), X(2), X(3), YRef(0), YRef(1), dYRef(0), dYRef(1), Cmd(0), Cmd(1), 
-                       twist_msg.linear.x, twist_msg.angular.z);
 
         } else {
             ROS_INFO("No odom message received");
@@ -185,6 +177,29 @@ int main(int argc, char** argv)
 }
 
 /*
+ * Basic control
+ */
+Eigen::Vector2d control_basic(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef)
+{
+    float dist_to_ref;
+    float K_VEL = 0.2;
+    float K_RATE = 0.5;
+
+    dist_to_ref = sqrt(pow(X(0) - YRef(0), 2) + pow(X(1) - YRef(1), 2));
+
+    U(0) = K_VEL * dist_to_ref;
+    U(1) = K_RATE * (atan((YRef(1) - X(1)) / (YRef(0) - X(0))) - X(2));
+
+#ifdef DEBUG_CONTROL
+    ROS_ERROR("X: [%f %f] => [%f %f] | dist_to_ref: %f | U(0) = %f m/s | U(1) = %f deg/s",
+        X(0), X(1), YRef(0), YRef(1), dist_to_ref, U(0), U(1) * RAD_TO_DEG);
+#endif  
+
+    return U;
+}
+
+
+/*
  * Matlab implementation:
  * A = [-x(4) * sin(x(3)), cos(x(3)); ...
  *     x(4) * cos(x(3)), sin(x(3))];
@@ -193,7 +208,7 @@ int main(int argc, char** argv)
  * v = (yr - y) + 2 * (dyr - dy);
  * u = inv(A) * v;
  */
-Eigen::Vector2d control(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef)
+Eigen::Vector2d control_linear_feedback(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef)
 {
     Eigen::MatrixXd A(2, 2);
     A(0, 0) = -X(3) * sin(X(2));
