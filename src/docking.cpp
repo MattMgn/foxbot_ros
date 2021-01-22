@@ -94,6 +94,7 @@ int main(int argc, char** argv)
     ros::Rate loop_rate(PUB_FREQUENCY);
 
     /* Compute trajectory */
+    // TODO: compute path when first odom is received
     struct traj coord = bezier(x_coord, y_coord, TRAJ_POINT_NB, TRAJ_DT, TRAJ_DURATION);
     ros::Publisher path_pub = nh.advertise<nav_msgs::Path>("path", 1000);
     nav_msgs::Path path_msg;
@@ -177,22 +178,40 @@ int main(int argc, char** argv)
 }
 
 /*
+ * Implementation of wrapping from https://stackoverflow.com/questions/4633177/c-how-to-wrap-a-float-to-the-interval-pi-pi
+ */
+double wrapMax(double x, double max)
+{
+    /* integer math: `(max + x % max) % max` */
+    return fmod(max + fmod(x, max), max);
+}
+
+/*
  * Basic control
  */
 Eigen::Vector2d control_basic(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef)
 {
     float dist_to_ref;
-    float K_VEL = 0.2;
-    float K_RATE = 0.5;
+    float angle_to_ref, angle_to_ref_wrapped;
+    float K_VEL = 0.2; //0.4
+    float K_RATE = 0.45; //0.9
 
     dist_to_ref = sqrt(pow(X(0) - YRef(0), 2) + pow(X(1) - YRef(1), 2));
+    angle_to_ref = atan2((YRef(1) - X(1)), (YRef(0) - X(0))) - X(2);
 
-    U(0) = K_VEL * dist_to_ref;
-    U(1) = K_RATE * (atan((YRef(1) - X(1)) / (YRef(0) - X(0))) - X(2));
+    angle_to_ref_wrapped = -M_PI + wrapMax(angle_to_ref + M_PI, M_PI + M_PI);
+ 
+    U(0) = K_VEL * dist_to_ref + 0.005;
+
+    /* dead band */
+    if (abs(dist_to_ref) < 0.1)
+        U(0) = 0.0;
+
+    U(1) = K_RATE * angle_to_ref_wrapped;
 
 #ifdef DEBUG_CONTROL
-    ROS_ERROR("X: [%f %f] => [%f %f] | dist_to_ref: %f | U(0) = %f m/s | U(1) = %f deg/s",
-        X(0), X(1), YRef(0), YRef(1), dist_to_ref, U(0), U(1) * RAD_TO_DEG);
+    ROS_ERROR("X: [%f %f] => [%f %f] | dist_to_ref: %f | angle_to_ref %f | U(0) = %f m/s | U(1) = %f deg/s",
+        X(0), X(1), YRef(0), YRef(1), dist_to_ref, angle_to_ref * RAD_TO_DEG, U(0), U(1) * RAD_TO_DEG);
 #endif  
 
     return U;
@@ -319,7 +338,9 @@ void odomMessageCallback(const nav_msgs::Odometry& odom_msg)
     at_least_one_odom_received = true;
     X(0) = (double)odom_msg.pose.pose.position.x;
     X(1) = (double)odom_msg.pose.pose.position.y;
-    X(2) = 2.0 * asin((double)odom_msg.pose.pose.orientation.z);
+    double siny_cosp = 2 * (odom_msg.pose.pose.orientation.w * odom_msg.pose.pose.orientation.z + odom_msg.pose.pose.orientation.x * odom_msg.pose.pose.orientation.y);
+    double cosy_cosp = 1 - 2 * (odom_msg.pose.pose.orientation.y * odom_msg.pose.pose.orientation.y + odom_msg.pose.pose.orientation.z * odom_msg.pose.pose.orientation.z);
+    X(2) = atan2(siny_cosp, cosy_cosp);
     X(3) = (double)odom_msg.twist.twist.linear.x;
 
 #ifdef DEBUG
