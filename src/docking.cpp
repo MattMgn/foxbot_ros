@@ -30,7 +30,7 @@
 #define DEBUG_CONTROL
 //#define DEBUG_BEZIER
 
-#define TRAJ_POINT_NB   3
+#define TRAJ_POINT_NB   4
 #define TRAJ_DURATION   30      //s
 #define TRAJ_DT         0.2    //s
 #define PUB_FREQUENCY   5     //Hz
@@ -57,11 +57,15 @@ struct traj bezier(float *x_coord, float *y_coord, int pt_nb, float dt, float du
 void odomMessageCallback(const nav_msgs::Odometry& odom_msg);
 Eigen::Vector2d control_basic(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef);
 Eigen::Vector2d control_linear_feedback(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Vector2d dYRef);
+nav_msgs::Path getPathMsgFromBezier(struct traj coord);
 
-float x_coord[TRAJ_POINT_NB] = {0.5,  1.0, 3.0};
-float y_coord[TRAJ_POINT_NB] = {0.5, 6.0, 3.0};
 
-bool at_least_one_odom_received = false;
+float x_coord[TRAJ_POINT_NB] = {0.5, 0.6, 0.5, 0.3};
+float y_coord[TRAJ_POINT_NB] = {0.5, 0.0, 0.0, 0.0};
+
+bool first_received_odom = false;
+bool goal_reached = false;
+bool path_published = false;
 
 static float saturate(float val, float lower, float upper)
 {
@@ -83,69 +87,31 @@ int main(int argc, char** argv)
 
     ros::init(argc, argv, "docking");
     ros::NodeHandle nh;
-
     ROS_INFO("Docking node launched");
-
     ros::Subscriber odom_msg_sub = nh.subscribe("/odom", 100, odomMessageCallback);
-
     ros::Publisher twist_pub = nh.advertise<geometry_msgs::Twist>("cmd_vel", 1000);
-    geometry_msgs::Twist msg;
-
     ros::Rate loop_rate(PUB_FREQUENCY);
-
-    /* Compute trajectory */
-    // TODO: compute path when first odom is received
-    struct traj coord = bezier(x_coord, y_coord, TRAJ_POINT_NB, TRAJ_DT, TRAJ_DURATION);
-    ros::Publisher path_pub = nh.advertise<nav_msgs::Path>("path", 1000);
-    nav_msgs::Path path_msg;
-    path_msg.header.seq = 0;
-    path_msg.header.stamp = ros::Time::now();
-    path_msg.header.frame_id = "odom";
-    for (int i = 0; i < coord.nb; i++) {
-        geometry_msgs::PoseStamped pose;
-        pose.header.seq = i;
-        pose.header.stamp = ros::Time::now() + ros::Duration((float)(i) * TRAJ_DT);
-        pose.header.frame_id = "odom";
-        pose.pose.position.x = (float)coord.x[i];
-        pose.pose.position.y = (float)coord.y[i];
-        pose.pose.position.z = 0.f;
-        pose.pose.orientation.w = 1.f;
-        pose.pose.orientation.x = 0.f;
-        pose.pose.orientation.y = 0.f;
-        pose.pose.orientation.z = 0.f;
-        path_msg.poses.push_back(pose);
-#ifdef DEBUG
-        ROS_INFO("pose(%f) = [%f %f]", (float)(i) * TRAJ_DT, pose.pose.position.x, pose.pose.position.y);
-#endif
-    }
-    path_pub.publish(path_msg);
-    ros::spinOnce();
-    ros::Duration(1.0).sleep();
-
-#ifdef DEBUG
-    std::cout << "XX = [";
-    for (int k = 0; k < coord.nb; k++)
-        std::cout << coord.x[k] << ", ";
-    std::cout << "]" << std::endl;
-
-    std::cout << "YY = [";;
-    for (int k = 0; k < coord.nb; k++)
-        std::cout << coord.y[k] << ", ";
-    std::cout << "]" << std::endl;
-
-    std::cout << "T = [";;
-    for (int k = 0; k < coord.nb; k++)
-        std::cout << coord.t[k] << ", ";
-    std::cout << "]" << std::endl;
-#endif
 
     /* TODO: controller should work with different frequency for guidance and control loop */
     int p = 1;
-    while (ros::ok() && (p < coord.nb - 1))
+    struct traj coord;
+    ros::Publisher path_pub = nh.advertise<nav_msgs::Path>("path", 1000); // here for rviz only
+    nav_msgs::Path path_msg; // here for rviz only, could be in the while,
+    while (ros::ok() && (!goal_reached))
     {
-        geometry_msgs::Twist twist_msg;
-        if (at_least_one_odom_received) {
+        if (first_received_odom && !path_published) {
+            /* Compute trajectory */
+            x_coord[0] = X(0); y_coord[0] = X(1); // start path with current pose
+            coord = bezier(x_coord, y_coord, TRAJ_POINT_NB, TRAJ_DT, TRAJ_DURATION);
+            path_msg = getPathMsgFromBezier(coord);
+            path_pub.publish(path_msg);
+            path_published = true;
+            ros::spinOnce();
+            ros::Duration(1.0).sleep();
+        }
 
+        geometry_msgs::Twist twist_msg;
+        if (path_published) {
             // estimate
             /* TODO: use visual pose estimator fusionned with odometry */
 
@@ -157,22 +123,33 @@ int main(int argc, char** argv)
             YRef(1) = (double)coord.y[p];
             dYRef(0) = (double)((coord.x[p] - coord.x[p - 1]) / TRAJ_DT);
             dYRef(1) = (double)((coord.y[p] - coord.y[p - 1]) / TRAJ_DT);
-
             Cmd = control_basic(X, YRef, dYRef);
 
             // publish twist command
             twist_msg.linear.x = saturate((float)Cmd(0), -MAX_LIN_SPEED, MAX_LIN_SPEED);
             twist_msg.angular.z = saturate((float)Cmd(1), -MAX_ANG_SPEED, MAX_ANG_SPEED);
+
+            if (p >= coord.nb - 1) {
+                float dist_to_ref = sqrt(pow(X(0) - YRef(0), 2) + pow(X(1) - YRef(1), 2));
+                if (dist_to_ref < 0.05) {
+                    goal_reached = true;
+                    twist_msg.linear.x = 0.0;
+                    twist_msg.angular.z = 0.0;
+                }
+            } else {
+                p++;
+            }
+
             twist_pub.publish(twist_msg);
 
         } else {
-            ROS_INFO("No odom message received");
+            ROS_INFO("Path not published yet");
         }
 
-        path_pub.publish(path_msg);
+        if (path_published)
+            path_pub.publish(path_msg); // to delete, only for rviz
         ros::spinOnce();
         loop_rate.sleep();
-        p++;
     }
 
 }
@@ -204,7 +181,7 @@ Eigen::Vector2d control_basic(Eigen::Vector4d X, Eigen::Vector2d YRef, Eigen::Ve
     U(0) = K_VEL * dist_to_ref + 0.005;
 
     /* dead band */
-    if (abs(dist_to_ref) < 0.1)
+    if (abs(dist_to_ref) < 0.02)
         U(0) = 0.0;
 
     U(1) = K_RATE * angle_to_ref_wrapped;
@@ -262,6 +239,32 @@ Eigen::Vector2d control_linear_feedback(Eigen::Vector4d X, Eigen::Vector2d YRef,
     return U;
 }
 
+nav_msgs::Path getPathMsgFromBezier(struct traj coord)
+{
+
+    nav_msgs::Path path_msg;
+
+    path_msg.header.seq = 0;
+    path_msg.header.stamp = ros::Time::now();
+    path_msg.header.frame_id = "odom";
+
+    for (int i = 0; i < coord.nb; i++) {
+        geometry_msgs::PoseStamped pose;
+        pose.header.seq = i;
+        pose.header.stamp = ros::Time::now() + ros::Duration((float)(i) * TRAJ_DT);
+        pose.header.frame_id = "odom";
+        pose.pose.position.x = (float)coord.x[i];
+        pose.pose.position.y = (float)coord.y[i];
+        pose.pose.position.z = 0.f;
+        pose.pose.orientation.w = 1.f;
+        pose.pose.orientation.x = 0.f;
+        pose.pose.orientation.y = 0.f;
+        pose.pose.orientation.z = 0.f;
+        path_msg.poses.push_back(pose);
+    }
+
+    return path_msg;
+}
 
 /*
  * Matlab implementation:
@@ -306,7 +309,6 @@ struct traj bezier(float *x_coord, float *y_coord, int pt_nb, float dt, float du
         }
     }
 
-
 #ifdef DEBUG_BEZIER
     for (int k = 0; k < xyt.nb; k++)
         ROS_INFO("bezier: k = %i | t =  %f | x = %f | y = %f", k, xyt.t[k], xyt.x[k], xyt.y[k]);
@@ -335,7 +337,11 @@ int factorial(int n)
 
 void odomMessageCallback(const nav_msgs::Odometry& odom_msg)
 {
-    at_least_one_odom_received = true;
+    if (first_received_odom == false) {
+        first_received_odom = true;
+        // compute and send path
+    }
+
     X(0) = (double)odom_msg.pose.pose.position.x;
     X(1) = (double)odom_msg.pose.pose.position.y;
     double siny_cosp = 2 * (odom_msg.pose.pose.orientation.w * odom_msg.pose.pose.orientation.z + odom_msg.pose.pose.orientation.x * odom_msg.pose.pose.orientation.y);
